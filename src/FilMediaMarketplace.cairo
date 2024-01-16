@@ -17,12 +17,26 @@ trait IERC20<TContractState> {
 
 #[starknet::interface]
 trait FilMediaMarketplaceTrait<TContractState> {
-    fn deposit(ref self: TContractState, _amount: u128);
-    fn withdraw(ref self: TContractState, _amount: u128);
-    fn get_balance(self: @TContractState) -> u128;
-    fn get_Target(self: @TContractState) -> (u128 , FilMediaMarketplace::targetOption) ;
-    // fn get_owner(self: @TContractState) -> ContractAddress;
-    fn viewTarget(self: @TContractState) -> target;
+    fn createUser(ref self: TContractState, _amount: u128);
+    fn createArtist(ref self: TContractState, _amount: u128);
+    fn listNFT(self: @TContractState) -> u128;
+    fn addNFTForArtist(self: @TContractState) -> (u128 , FilMediaMarketplace::targetOption) ;
+    fn subcribeToArtist(self: @TContractState) -> (u128 , FilMediaMarketplace::targetOption) ;
+    fn cancelSubcribtion(self: @TContractState) -> (u128 , FilMediaMarketplace::targetOption) ;
+    fn setTokenId(self: @TContractState) -> (u128 , FilMediaMarketplace::targetOption) ;
+    fn checkIfUserIsSubcribed(self: @TContractState) -> ContractAddress;
+    fn getSubcribers(self: @TContractState) -> ContractAddress;
+    fn getAllArtists(self: @TContractState) -> ContractAddress;
+    fn getAnalytics(self: @TContractState) -> ContractAddress;
+    fn getTokenId(self: @TContractState) -> ContractAddress;
+    fn getMusicNFT(self: @TContractState) -> ContractAddress;
+    fn getMusic(self: @TContractState) -> ContractAddress;
+    fn getArtist(self: @TContractState) -> ContractAddress;
+    fn getUser(self: @TContractState) -> ContractAddress;
+    fn getUserBalance(self: @TContractState) -> ContractAddress;
+    fn isWalletAnArtist(self: @TContractState) -> ContractAddress;
+    fn getUserOrArtistTokenId(self: @TContractState) -> ContractAddress;
+    // fn viewTarget(self: @TContractState) -> target;
 }
 
 #[starknet::contract]
@@ -43,11 +57,9 @@ mod FilMediaMarketplace {
     #[storage]
     struct Storage {
         token: IERC20Dispatcher,
-        manager: ContractAddress,
         balance: u128,
-        withdrawalCondition: target,
         #[substorage(v0)]
-        ownable: ownable_component::Storage
+        lastTimeStamp: u128,
     }
 
     #[derive(Drop, Serde)]
@@ -56,59 +68,62 @@ mod FilMediaMarketplace {
         targetAmount,
     }
 
-    #[event]
     #[derive(Drop, starknet::Event)]
-    enum Event {
-        Deposit: Deposit,
-        Withdraw: Withdraw,
-        PaidProcessingFee: PaidProcessingFee,
-        OwnableEvent: ownable_component::Event
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct Deposit {
+    struct CreatedUserNFT {
         #[key]
-        from: ContractAddress,
+        nft: ContractAddress,
         #[key]
+        userTokenId: u128,
+        #[key]
+        user: ContractAddress,
         Amount: u128,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct Withdraw {
+    struct CreatedArtistNFT {
         #[key]
-        to: ContractAddress,
+        nft: ContractAddress,
         #[key]
-        Amount: u128,
+        artistTokenId: u128,
         #[key]
-        ActualAmount: u128,
+        artist: ContractAddress,
     }
 
-    #[derive(Drop, starknet::Event)]
-    struct PaidProcessingFee {
+  #[derive(Drop, starknet::Event)]
+    struct ListedMusicNFT {
         #[key]
-        from: ContractAddress,
+        nft: ContractAddress,
         #[key]
-        Amount: u128,
+        tokenId: u128,
+        #[key]
+        artistTokenId: u128,
+        artist: u128,
+        chainid: u128,
     }
 
-    mod Errors {
-        const Address_Zero_Owner: felt252 = 'Invalid owner';
-        const Address_Zero_Token: felt252 = 'Invalid Token';
-        const UnAuthorized_Caller: felt252 = 'UnAuthorized caller';
-        const Insufficient_Balance: felt252 = 'Insufficient balance';
+  #[derive(Drop, starknet::Event)]
+    struct SubcribedToArtist {
+        #[key]
+        subcriber: ContractAddress,
+        #[key]
+        artist: ContractAddress,
+        #[key]
+        chainid: u128,
+    }
+
+  #[derive(Drop, starknet::Event)]
+    struct CanceledSubcription {
+        #[key]
+        subcriber: ContractAddress,
+        #[key]
+        artist: ContractAddress,
+        #[key]
+        chainid: u128,
     }
 
     #[constructor]
     fn constructor(ref self: ContractState, _owner: ContractAddress, _token: ContractAddress, _manager: ContractAddress, target: targetOption, targetDetails: u128) {
-        assert(!_owner.is_zero(), Errors::Address_Zero_Owner);
-        assert(!_token.is_zero(), Errors::Address_Zero_Token);
-        self.ownable.owner.write(_owner);
-        self.token.write(super::IERC20Dispatcher{contract_address: _token});
-        self.manager.write(_manager);
-        match target {
-            targetOption::targetTime => self.withdrawalCondition.write(target::blockTime(targetDetails.into())),
-            targetOption::targetAmount => self.withdrawalCondition.write(target::amount(targetDetails)),
-        }
+        self.lastTimeStamp.write(block.timestamp);
     }
 
     #[external(v0)]
@@ -121,39 +136,9 @@ mod FilMediaMarketplace {
 
             self.emit(Deposit { from: caller, Amount: _amount});
         }
-
-        fn withdraw(ref self: ContractState, _amount: u128) {
-            self.ownable.assert_only_owner();
-            let (caller, this, currentBalance) = self.getImportantAddresses();
-            assert(self.balance.read() >= _amount, Errors::Insufficient_Balance);
-
-            let mut new_amount: u128 = 0;
-            match self.withdrawalCondition.read() {
-                target::blockTime(x) => new_amount = self.verifyBlockTime(x, _amount),
-                target::amount(x) => new_amount = self.verifyTargetAmount(x, _amount),
-            };
-
-            self.balance.write(currentBalance - _amount);
-            self.token.read().transfer(caller, new_amount.into());
-
-            self.emit(Withdraw { to: caller, Amount: _amount, ActualAmount: new_amount});
-        }
-
+        
         fn get_balance(self: @ContractState) -> u128 {
             self.balance.read()
         }
-
-        fn get_Target(self: @ContractState) -> (u128 , targetOption) {
-            let condition = self.withdrawalCondition.read();
-            match condition {
-                target::blockTime(x) => {return (x, targetOption::targetTime);},
-                target::amount(x) => {return (x, targetOption::targetAmount);},
-            }
-        }
-
-        fn viewTarget(self: @ContractState) -> target {
-            self.withdrawalCondition.read()
-        }
-
     }
 }
